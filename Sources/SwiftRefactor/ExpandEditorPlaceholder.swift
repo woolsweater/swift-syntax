@@ -50,9 +50,7 @@ import SwiftSyntaxBuilder
 ///
 /// ### After
 /// ```swift
-/// { someInt in
-///   <#T##String#>
-/// }
+/// <#{ <#someInt#> in <#T##String#> }#>
 /// ```
 ///
 /// ## Other Type Placeholder
@@ -94,18 +92,18 @@ struct ExpandSingleEditorPlaceholder: EditRefactoringProvider {
 
     let expanded: String
     if let functionType = placeholder.typeForExpansion?.as(FunctionTypeSyntax.self) {
-      let basicFormat = BasicFormat(
+      let format = ClosureLiteralFormat(
         indentationWidth: context.indentationWidth,
         initialIndentation: context.initialIndentation
       )
-      var formattedExpansion = functionType.closureExpansion.formatted(using: basicFormat).description
+      var formattedExpansion = functionType.closureExpansion.formatted(using: format).description
       // Strip the initial indentation from the placeholder itself. We only introduced the initial indentation to
       // format consecutive lines. We don't want it at the front of the initial line because it replaces an expression
       // that might be in the middle of a line.
       if formattedExpansion.hasPrefix(context.initialIndentation.description) {
         formattedExpansion = String(formattedExpansion.dropFirst(context.initialIndentation.description.count))
       }
-      expanded = formattedExpansion
+      expanded = wrapInPlaceholder(formattedExpansion)
     } else {
       expanded = placeholder.displayText
     }
@@ -117,9 +115,9 @@ struct ExpandSingleEditorPlaceholder: EditRefactoringProvider {
 }
 
 /// If a function-typed placeholder is the argument to a non-trailing closure
-/// call, expands it and any adjacent function-typed placeholders to trailing
-/// closures on that call. All other placeholders will expand as per
-/// `ExpandEditorPlaceholder`.
+/// call, expands it and any adjacent function-typed placeholders to literal
+/// closures with inner placeholders on that call. All other placeholders will
+/// expand as per `ExpandEditorPlaceholder`.
 ///
 /// ## Before
 /// ```swift
@@ -137,12 +135,10 @@ struct ExpandSingleEditorPlaceholder: EditRefactoringProvider {
 /// foo(
 ///   closure1: <#T##(Int) -> String##(Int) -> String##(_ someInt: Int) -> String#>,
 ///   normalArg: <#T##Int#>,
-///   closure2: { ... }
-/// ) { someInt in
-///   <#T##String#>
-/// } closure2: { someInt in
-///   <#T##String#>
-/// }
+///   closure2: { ... },
+///   closure3: { <#someInt#> in <#T##String#> },
+///   closure4: { <#someInt#> in <#T##String#> }
+/// )
 /// ```
 ///
 /// Expansion on `closure1` and `normalArg` is the same as `ExpandSingleEditorPlaceholder`.
@@ -161,7 +157,7 @@ public struct ExpandEditorPlaceholder: EditRefactoringProvider {
       let arg = placeholder.parent?.as(LabeledExprSyntax.self),
       let argList = arg.parent?.as(LabeledExprListSyntax.self),
       let call = argList.parent?.as(FunctionCallExprSyntax.self),
-      let expandedTrailingClosures = ExpandEditorPlaceholdersToTrailingClosures.expandTrailingClosurePlaceholders(
+      let expandedClosures = ExpandEditorPlaceholdersToLiteralClosures.expandClosurePlaceholders(
         in: call,
         ifIncluded: arg,
         indentationWidth: context.indentationWidth
@@ -170,11 +166,11 @@ public struct ExpandEditorPlaceholder: EditRefactoringProvider {
       return ExpandSingleEditorPlaceholder.textRefactor(syntax: token)
     }
 
-    return [SourceEdit.replace(call, with: expandedTrailingClosures.description)]
+    return [SourceEdit.replace(call, with: expandedClosures.description)]
   }
 }
 
-/// Expand all the editor placeholders in the function call that can be converted to trailing closures.
+/// Expand all the editor placeholders in the function call to literal closures.
 ///
 /// ## Before
 /// ```swift
@@ -189,13 +185,11 @@ public struct ExpandEditorPlaceholder: EditRefactoringProvider {
 /// ```swift
 /// foo(
 ///   arg: <#T##Int#>,
-/// ) { someInt in
-///   <#T##String#>
-/// } secondClosure: { someInt in
-///   <#T##String#>
-/// }
+///   firstClosure: { <#someInt#> in <#T##String#> },
+///   secondClosure: { <#someInt#> in <#T##String#> }
+/// )
 /// ```
-public struct ExpandEditorPlaceholdersToTrailingClosures: SyntaxRefactoringProvider {
+public struct ExpandEditorPlaceholdersToLiteralClosures: SyntaxRefactoringProvider {
   public struct Context {
     public let indentationWidth: Trivia?
 
@@ -208,7 +202,8 @@ public struct ExpandEditorPlaceholdersToTrailingClosures: SyntaxRefactoringProvi
     syntax call: FunctionCallExprSyntax,
     in context: Context = Context()
   ) -> FunctionCallExprSyntax? {
-    return Self.expandTrailingClosurePlaceholders(in: call, ifIncluded: nil, indentationWidth: context.indentationWidth)
+    return Self.expandClosurePlaceholders(in: call, ifIncluded: nil, indentationWidth: context.indentationWidth
+    )
   }
 
   /// If the given argument is `nil` or one of the last arguments that are all
@@ -216,24 +211,12 @@ public struct ExpandEditorPlaceholdersToTrailingClosures: SyntaxRefactoringProvi
   /// closure, then return a replacement of this call with one that uses
   /// closures based on the function types provided by each editor placeholder.
   /// Otherwise return nil.
-  fileprivate static func expandTrailingClosurePlaceholders(
+  fileprivate static func expandClosurePlaceholders(
     in call: FunctionCallExprSyntax,
     ifIncluded arg: LabeledExprSyntax?,
     indentationWidth: Trivia?
   ) -> FunctionCallExprSyntax? {
-    guard let expanded = call.expandTrailingClosurePlaceholders(ifIncluded: arg, indentationWidth: indentationWidth)
-    else {
-      return nil
-    }
-
-    let callToTrailingContext = CallToTrailingClosures.Context(
-      startAtArgument: call.arguments.count - expanded.numClosures
-    )
-    guard let trailing = CallToTrailingClosures.refactor(syntax: expanded.expr, in: callToTrailingContext) else {
-      return nil
-    }
-
-    return trailing
+    return call.expandClosurePlaceholders(ifIncluded: arg, indentationWidth: indentationWidth)
   }
 }
 
@@ -244,9 +227,7 @@ extension FunctionTypeSyntax {
   /// ```
   /// would become
   /// ```
-  /// { someInt in
-  ///   <#T##String#>
-  /// }
+  /// { <#someInt#> in <#T##String#> }
   /// ```
   fileprivate var closureExpansion: ClosureExprSyntax {
     let closureSignature: ClosureSignatureSyntax?
@@ -311,10 +292,10 @@ extension FunctionCallExprSyntax {
   /// closure, then return a replacement of this call with one that uses
   /// closures based on the function types provided by each editor placeholder.
   /// Otherwise return nil.
-  fileprivate func expandTrailingClosurePlaceholders(
+  fileprivate func expandClosurePlaceholders(
     ifIncluded: LabeledExprSyntax?,
     indentationWidth: Trivia?
-  ) -> (expr: FunctionCallExprSyntax, numClosures: Int)? {
+  ) -> FunctionCallExprSyntax? {
     var includedArg = false
     var argsToExpand = 0
     for arg in arguments.reversed() {
@@ -359,10 +340,7 @@ extension FunctionCallExprSyntax {
     }
 
     let originalArgs = arguments.dropLast(argsToExpand)
-    return (
-      detached.with(\.arguments, LabeledExprListSyntax(originalArgs + expandedArgs)),
-      expandedArgs.count
-    )
+    return detached.with(\.arguments, LabeledExprListSyntax(originalArgs + expandedArgs))
   }
 }
 

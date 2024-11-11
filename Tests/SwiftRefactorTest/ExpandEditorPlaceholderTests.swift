@@ -18,6 +18,12 @@ import SwiftSyntaxBuilder
 import XCTest
 import _SwiftSyntaxTestSupport
 
+fileprivate extension DefaultStringInterpolation {
+  mutating func appendInterpolation(placeholder string: String) {
+    self.appendLiteral(wrapInPlaceholder(string))
+  }
+}
+
 fileprivate let closurePlaceholder = wrapInPlaceholder("T##closure##() -> Void")
 fileprivate let closureWithArgPlaceholder = wrapInPlaceholder(
   "T##(Int) -> String##(Int) -> String##(_ someInt: Int) -> String"
@@ -47,27 +53,21 @@ final class ExpandEditorPlaceholderTests: XCTestCase {
 
   func testVoidClosure() throws {
     let expected = """
-      {
-          \(voidPlaceholder)
-      }
+      \(placeholder: "{ \(voidPlaceholder) }")
       """
     try assertRefactorPlaceholder("T##display##() -> Void", expected: expected)
   }
 
   func testTypedReturnClosure() throws {
     let expected = """
-      {
-          \(intPlaceholder)
-      }
+      \(placeholder: "{ \(intPlaceholder) }")
       """
     try assertRefactorPlaceholder("T##display##() -> Int", expected: expected)
   }
 
   func testClosureWithArg() throws {
     let expected = """
-      { arg in
-          \(intPlaceholder)
-      }
+      \(placeholder: "{ arg in \(intPlaceholder) }")
       """
     try assertRefactorPlaceholder("T##display##(arg: String) -> Int", expected: expected)
     try assertRefactorPlaceholder("T##display##(_ arg: String) -> Int", expected: expected)
@@ -75,9 +75,7 @@ final class ExpandEditorPlaceholderTests: XCTestCase {
 
   func testClosureWithMultipleArgs() throws {
     let expected = """
-      { arg, arg2 in
-          \(intPlaceholder)
-      }
+      \(placeholder: "{ arg, arg2 in \(intPlaceholder) }")
       """
     try assertRefactorPlaceholder("T##display##(arg: String, arg2: String) -> Int", expected: expected)
   }
@@ -90,9 +88,7 @@ final class ExpandEditorPlaceholderTests: XCTestCase {
   func testClosureComments() throws {
     let placeholder = wrapInPlaceholder("T##display##(arg: String) -> Int")
     let expected = """
-      /*c1*/{ arg in
-          \(intPlaceholder)
-      }/*c2*/
+      /*c1*/\(placeholder: "{ arg in \(intPlaceholder) }")/*c2*/
       """
     try assertRefactorPlaceholder("/*c1*/\(placeholder)/*c2*/", wrap: false, expected: expected)
   }
@@ -101,9 +97,7 @@ final class ExpandEditorPlaceholderTests: XCTestCase {
     let baseline = "call(\(closurePlaceholder))"
 
     let expected: String = """
-      call {
-          \(voidPlaceholder)
-      }
+      call(\(placeholder: "{ \(voidPlaceholder) }"))
       """
 
     try assertRefactorPlaceholderCall(baseline, expected: expected)
@@ -118,9 +112,7 @@ final class ExpandEditorPlaceholderTests: XCTestCase {
     let baseline = "call(\(placeholder))"
 
     let expected: String = """
-      call {
-          \(intPlaceholder)
-      }
+      call(\(placeholder: "{ \(intPlaceholder) }"))
       """
 
     try assertRefactorPlaceholderCall(baseline, expected: expected)
@@ -132,9 +124,7 @@ final class ExpandEditorPlaceholderTests: XCTestCase {
 
     let int = wrapInPlaceholder("Int")
     let expected: String = """
-      call { \(int) in
-          \(voidPlaceholder)
-      }
+      call(\(placeholder: "{ \(int) in \(voidPlaceholder) }"))
       """
 
     try assertRefactorPlaceholderCall(baseline, expected: expected)
@@ -144,11 +134,7 @@ final class ExpandEditorPlaceholderTests: XCTestCase {
     let baseline = "call(arg1: \(closurePlaceholder), arg2: \(closurePlaceholder))"
 
     let expected: String = """
-      call {
-          \(voidPlaceholder)
-      } arg2: {
-          \(voidPlaceholder)
-      }
+      call(arg1: \(placeholder: "{ \(voidPlaceholder) }"), arg2: \(placeholder: "{ \(voidPlaceholder) }"))
       """
 
     try assertRefactorPlaceholderCall(baseline, expected: expected)
@@ -158,11 +144,7 @@ final class ExpandEditorPlaceholderTests: XCTestCase {
   func testNonClosureAfterClosure() throws {
     let baseline = "call(arg1: \(closurePlaceholder), arg2: \(intPlaceholder))"
 
-    let expected: String = """
-      {
-          \(voidPlaceholder)
-      }
-      """
+    let expected: String = "\(placeholder: "{ \(voidPlaceholder) }")"
 
     try assertRefactorPlaceholderToken(baseline, expected: expected)
   }
@@ -173,106 +155,84 @@ final class ExpandEditorPlaceholderTests: XCTestCase {
           /*c8*/\(closurePlaceholder)/*c9*/)/*c10*/
       """
 
-    // TODO: Should we remove whitespace from the merged trivia? The space
-    // between c2 and c3 is the one added for the `{`. The space between c4
-    // and c5 is the space between the `:` and c5 (added by merging the
-    // colon's trivia since it was removed).
     let expected: String = """
-      /*c1*/foo/*c2*/ /*c3*//*c4*/ /*c5*/{
-          \(voidPlaceholder)
-      }/*c6*//*c7*/ _:
-          /*c8*/{
-          \(voidPlaceholder)
-      }/*c9*//*c10*/
+      /*c1*/foo/*c2*/(/*c3*/arg/*c4*/: /*c5*/\(placeholder: "{ \(voidPlaceholder) }")/*c6*/,/*c7*/
+          /*c8*/\(placeholder: "{ \(voidPlaceholder) }")/*c9*/)/*c10*/
       """
 
     try assertRefactorPlaceholderCall(baseline, placeholder: 1, expected: expected)
   }
 
-  func testExpandEditorPlaceholdersToSingleTrailingClosures() throws {
-    try assertExpandEditorPlaceholdersToTrailingClosures(
+  func testExpandEditorPlaceholdersToSingleClosures() throws {
+    try assertExpandEditorPlaceholdersToClosures(
       """
       foo(arg: \(intPlaceholder), closure: \(closureWithArgPlaceholder))
       """,
       expected: """
-        foo(arg: \(intPlaceholder)) { someInt in
-            \(stringPlaceholder)
-        }
+        foo(arg: \(intPlaceholder), closure: \(placeholder: "{ someInt in \(stringPlaceholder) }"))
         """
     )
   }
 
-  func testExpandEditorPlaceholdersToMultipleTrailingClosures() throws {
-    try assertExpandEditorPlaceholdersToTrailingClosures(
+  func testExpandEditorPlaceholdersToMultipleClosures() throws {
+    try assertExpandEditorPlaceholdersToClosures(
       """
       foo(arg: \(intPlaceholder), firstClosure: \(closureWithArgPlaceholder), secondClosure: \(closureWithArgPlaceholder))
       """,
       expected: """
-        foo(arg: \(intPlaceholder)) { someInt in
-            \(stringPlaceholder)
-        } secondClosure: { someInt in
-            \(stringPlaceholder)
-        }
+        foo(arg: \(intPlaceholder), firstClosure: \(placeholder: "{ someInt in \(stringPlaceholder) }"), secondClosure: \(placeholder: "{ someInt in \(stringPlaceholder) }"))
         """
     )
   }
 
   func testExpandEditorPlaceholdersDoesntExpandClosureBeforeNormalArgs() throws {
-    try assertExpandEditorPlaceholdersToTrailingClosures(
+    try assertExpandEditorPlaceholdersToClosures(
       """
       foo(pre: \(closurePlaceholder), arg: \(intPlaceholder), closure: \(closureWithArgPlaceholder))
       """,
       expected: """
-        foo(pre: \(closurePlaceholder), arg: \(intPlaceholder)) { someInt in
-            \(stringPlaceholder)
-        }
+        foo(pre: \(closurePlaceholder), arg: \(intPlaceholder), closure: \(placeholder: "{ someInt in \(stringPlaceholder) }"))
         """
     )
   }
 
   func testCallHasInitialIndentation() throws {
-    try assertExpandEditorPlaceholdersToTrailingClosures(
+    try assertExpandEditorPlaceholdersToClosures(
       """
           foo(arg: 1, closure: \(closureWithArgPlaceholder))
       """,
       expected: """
-            foo(arg: 1) { someInt in
-                \(stringPlaceholder)
-            }
+            foo(arg: 1, closure: \(placeholder: "{ someInt in \(stringPlaceholder) }"))
         """
     )
   }
 
   func testCustomIndentationWidth() throws {
-    try assertExpandEditorPlaceholdersToTrailingClosures(
+    try assertExpandEditorPlaceholdersToClosures(
       """
       foo(arg: 1, closure: \(closureWithArgPlaceholder))
       """,
       expected: """
-        foo(arg: 1) { someInt in
-          \(stringPlaceholder)
-        }
+        foo(arg: 1, closure: \(placeholder: "{ someInt in \(stringPlaceholder) }"))
         """,
       indentationWidth: .spaces(2)
     )
   }
 
   func testCustomIndentationWidthWithInitialIndentation() throws {
-    try assertExpandEditorPlaceholdersToTrailingClosures(
+    try assertExpandEditorPlaceholdersToClosures(
       """
         foo(arg: 1, closure: \(closureWithArgPlaceholder))
       """,
       expected: """
-          foo(arg: 1) { someInt in
-            \(stringPlaceholder)
-          }
+          foo(arg: 1, closure: \(placeholder: "{ someInt in \(stringPlaceholder) }"))
         """,
       indentationWidth: .spaces(2)
     )
   }
 
   func testMultilineCall() throws {
-    try assertExpandEditorPlaceholdersToTrailingClosures(
+    try assertExpandEditorPlaceholdersToClosures(
       """
       foo(
           arg: 1,
@@ -281,16 +241,15 @@ final class ExpandEditorPlaceholderTests: XCTestCase {
       """,
       expected: """
         foo(
-            arg: 1
-        ) { someInt in
-            \(stringPlaceholder)
-        }
+            arg: 1,
+            closure: \(placeholder: "{ someInt in \(stringPlaceholder) }")
+        )
         """
     )
   }
 
   func testMultilineIndentedCall() throws {
-    try assertExpandEditorPlaceholdersToTrailingClosures(
+    try assertExpandEditorPlaceholdersToClosures(
       """
           foo(
               arg: 1,
@@ -299,25 +258,24 @@ final class ExpandEditorPlaceholderTests: XCTestCase {
       """,
       expected: """
             foo(
-                arg: 1
-            ) { someInt in
-                \(stringPlaceholder)
-            }
+                arg: 1,
+                closure: \(placeholder: "{ someInt in \(stringPlaceholder) }")
+            )
         """
     )
   }
 
   func testMultilineCallWithNoAdditionalArguments() throws {
-    try assertExpandEditorPlaceholdersToTrailingClosures(
+    try assertExpandEditorPlaceholdersToClosures(
       """
       foo(
           closure: \(closureWithArgPlaceholder)
       )
       """,
       expected: """
-        foo { someInt in
-            \(stringPlaceholder)
-        }
+        foo(
+            closure: \(placeholder: "{ someInt in \(stringPlaceholder) }")
+        )
         """
     )
   }
@@ -398,7 +356,7 @@ fileprivate func assertRefactorPlaceholderToken(
   )
 }
 
-fileprivate func assertExpandEditorPlaceholdersToTrailingClosures(
+fileprivate func assertExpandEditorPlaceholdersToClosures(
   _ expr: String,
   expected: String,
   indentationWidth: Trivia? = nil,
@@ -410,8 +368,8 @@ fileprivate func assertExpandEditorPlaceholdersToTrailingClosures(
 
   try assertRefactor(
     call,
-    context: ExpandEditorPlaceholdersToTrailingClosures.Context(indentationWidth: indentationWidth),
-    provider: ExpandEditorPlaceholdersToTrailingClosures.self,
+    context: ExpandEditorPlaceholdersToLiteralClosures.Context(indentationWidth: indentationWidth),
+    provider: ExpandEditorPlaceholdersToLiteralClosures.self,
     expected: [SourceEdit.replace(call, with: expected)],
     file: file,
     line: line
